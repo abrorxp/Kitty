@@ -25,7 +25,7 @@ const LLM_PROVIDER = (process.env.LLM_PROVIDER?.trim() || "openrouter").toLowerC
 const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL?.trim() || "liquid/lfm-2.5-2.6b:free";
 
 // OpenRouter free modellarni tez-tez o'zgartirib turadi — agar yana 404/402 xatolar
-// chiqsa, https://openrouter.ai/models?max_price=0 dan joriy ro'yxatni tekshirib,
+// chiqsa, https://openrouter.ai/models?_price=0 dan joriy ro'yxatni tekshirib,
 // shu yerni yangilang. Tartib TEZLIK bo'yicha.
 const OPENROUTER_FALLBACK_MODELS = [
   "liquid/lfm-2.5-2.6b:free",
@@ -447,7 +447,7 @@ async function openRouterChat(messages, model) {
   if (!apiKey) throw new Error("OpenRouter API key missing");
   const res = await axios.post(
     "https://openrouter.ai/api/v1/chat/completions",
-    { model, messages: messages.map(m => ({ role: m.role, content: m.content })), temperature: 0.85, max_tokens: 10000000 },
+    { model, messages: messages.map(m => ({ role: m.role, content: m.content })), temperature: 0.85, max_tokens: 1500 },
     {
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", "HTTP-Referer": "http://localhost", "X-Title": "KittyBot" },
       httpsAgent: new https.Agent({ keepAlive: true }),
