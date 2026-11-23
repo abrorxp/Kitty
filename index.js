@@ -447,7 +447,7 @@ async function openRouterChat(messages, model) {
   if (!apiKey) throw new Error("OpenRouter API key missing");
   const res = await axios.post(
     "https://openrouter.ai/api/v1/chat/completions",
-    { model, messages: messages.map(m => ({ role: m.role, content: m.content })), temperature: 0.85, max_tokens: 1024 },
+    { model, messages: messages.map(m => ({ role: m.role, content: m.content })), temperature: 0.85, max_tokens: 10000000 },
     {
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", "HTTP-Referer": "http://localhost", "X-Title": "KittyBot" },
       httpsAgent: new https.Agent({ keepAlive: true }),
