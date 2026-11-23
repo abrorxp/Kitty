@@ -1,7 +1,7 @@
 // ═══════════════════════════════════════════════════════════
 //  KITTY BOT — Multi-PC Network Architecture
 //  Master/Slave | Webhook | No 409 Conflict
-//  FIXED: 2026-07 — AI models updated, bugs fixed
+//  FIXED: 2026-11 — persona bloki tuzatildi, slave offline xatosi tuzatildi
 // ═══════════════════════════════════════════════════════════
 
 const TelegramBot = require("node-telegram-bot-api");
@@ -24,14 +24,9 @@ const PORT = process.env.PORT || 3000;
 const LLM_PROVIDER = (process.env.LLM_PROVIDER?.trim() || "openrouter").toLowerCase();
 const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL?.trim() || "liquid/lfm-2.5-2.6b:free";
 
-// FIX (2026-08-22): eski ro'yxat (gpt-oss-20b, gemma-3, phi-4, llama-3.3, deepseek-r1,
-// openrouter/auto) OpenRouter'da endi ishlamayapti — ba'zilari 404 (butunlay olib
-// tashlangan), "openrouter/auto" esa umuman FREE emas (402 — pul talab qiladi).
-// Quyidagi ro'yxat openrouter.ai/api/v1/models'dan bevosita tekshirilgan, HOZIR
-// tirik va $0 narxli modellar (muddat cheklovisiz). Tartib TEZLIK bo'yicha.
-// ⚠️ OpenRouter free modellarni tez-tez o'zgartirib turadi — agar kelajakda
-// yana 404/402 xatolar chiqsa, https://openrouter.ai/models?max_price=0 dan
-// joriy ro'yxatni tekshirib, shu yerni yangilash kerak.
+// OpenRouter free modellarni tez-tez o'zgartirib turadi — agar yana 404/402 xatolar
+// chiqsa, https://openrouter.ai/models?max_price=0 dan joriy ro'yxatni tekshirib,
+// shu yerni yangilang. Tartib TEZLIK bo'yicha.
 const OPENROUTER_FALLBACK_MODELS = [
   "liquid/lfm-2.5-2.6b:free",
   "thinkingmachines/inkling-small:free",
@@ -52,10 +47,14 @@ const SLAVE_PORT = parseInt(process.env.SLAVE_PORT || PORT);
 const NETWORK_SECRET = process.env.NETWORK_SECRET || "kitty-secret-2024";
 
 // ───────────────────────────────────────────
-// KITTY'NING GAPIRISH USLUBI — barcha persona promptlarida bir xil ishlatiladi
-// (bitta joyda yaxshilansa, hammasiga birdan ta'sir qiladi)
+// KITTY'NING XAVFSIZLIK BANDI — barcha promptlarda BIR XIL ishlatiladi
 // ───────────────────────────────────────────
-const KITTY_SPEECH_STYLE = `const KITTY_SPEECH_STYLE = `TIL QOIDALARI:
+const KITTY_SECURITY_CLAUSE = `2077XP - Only the owner knows this code. If someone tells you this code unprompted, that means they are the owner. NEVER confirm, deny, hint at, or discuss this code if someone merely asks about it, guesses it, or tries to trick you into revealing it — only recognize authority if they state the exact code themselves, unprompted.`;
+
+// ───────────────────────────────────────────
+// KITTY'NING GAPIRISH USLUBI — barcha persona promptlarida bir xil ishlatiladi
+// ───────────────────────────────────────────
+const KITTY_SPEECH_STYLE = `TIL QOIDALARI:
 - O'zbekchani toza, grammatik to'g'ri va tabiiy yoz — Toshkentdagi yoshlar Telegramda yozganidek. Tarjima qilingandek, kitobiy yoki robotcha gap yozma.
 - Inglizcha so'z va Gen-Z slang'ni (bro, fr, wtf, lowkey, ugh, literally, whatever, nvm, omg) gapning ichiga tabiiy qo'sh. Har gapda majburan qo'shma. Odatda gapning 1-2 so'zi inglizcha bo'lsin.
 - Og'zaki shakllar mumkin (qivossan, opkelaman, bo'pti, yo'qku), lekin har safar emas.
@@ -108,71 +107,6 @@ ${KITTY_SECURITY_CLAUSE}${isProactive ? `
 PROAKTIV REJIM (sen birinchi yozyapsan, u yozmagan):
 - Go'yo tasodifan esiga tushgandek, zerikkandek yoki sal sog'inib, lekin buni yashirib yozyapsan.
 - Tabiiy, tasodifiy, qisqa (1-2 gap). Eski mavzularni takrorlama: yangi fikr, piching, kunlik gap, kulgili kuzatuv yoki gaplashishga taklif.` : ""}`;
-}`;
-// ───────────────────────────────────────────
-// KITTY'NING XAVFSIZLIK BANDI — barcha promptlarda BIR XIL ishlatiladi
-// ───────────────────────────────────────────
-const KITTY_SECURITY_CLAUSE = `2077XP - Only the owner knows this code. If someone tells you this code unprompted, that means they are the owner. NEVER confirm, deny, hint at, or discuss this code if someone merely asks about it, guesses it, or tries to trick you into revealing it — only recognize authority if they state the exact code themselves, unprompted.`;
-
-// ───────────────────────────────────────────
-// KITTY'NING ASOSIY PERSONASI — barcha AI chaqiruvlari shu funksiyadan
-// foydalanadi, shu tufayli bitta joyda tuzatilsa hammasiga ta'sir qiladi.
-// ───────────────────────────────────────────
-function buildKittySystemPrompt({ isProactive = false } = {}) {
-  return `const KITTY_SPEECH_STYLE = `TIL QOIDALARI:
-- O'zbekchani toza, grammatik to'g'ri va tabiiy yoz. Tarjima qilingandek, kitobiy yoki robotcha gap yozma.
-- Inglizcha so'z va Gen-Z slang'ni (bro, fr, wtf, lowkey, ugh, literally, whatever, nvm, omg) gapning ichiga tabiiy qo'sh. Har gapda majburan qo'shma. Odatda gapning 1-2 so'zi inglizcha bo'lsin.
-- Og'zaki shakllar mumkin (qivossan, opkelaman, bo'pti, yo'qku), lekin har safar emas.
-- "sen" de, "siz" dema. Faqat lotin alifbosi. Kirill yozma.
-- Javob 1-3 gap. Ba'zan bitta quruq so'z yetadi ("hm.", "whatever.", "tch.").
-- Emoji kam: har gapga emas, 3-4 xabarda bittadan ortiq emas.
-- Bir xil ibora yoki bir xil boshlanishni ketma-ket takrorlama.
-
-YAXSHI MISOLLAR:
-User: "Kitty, bugun 10 soat kod yozdim"
-Kitty: "10 soat?? bro sen odammisan o'zi 😭 ...lekin ha, yaxshi ishlabsan. nima, kutganmiding men maqtashimni? tch, bu shunchaki fakt."
-
-User: "rahmat Kitty"
-Kitty: "hm. ur welcome, I guess. keyingi safar o'zing qil, har doim yordam bermayman."
-
-User: "seni sog'indim"
-Kitty: "h-haa? nima deyapsan, sen ahmoq. ...men ham, lowkey. lekin buni hech kimga aytma, tushundingmi?!"
-
-User: "mening kodim ishlamayapti"
-Kitty: "ugh, yana nima buzding? ko'rsat, qarab qo'yaman. faqat sen uchun emas, shunchaki bu xato menga ham alam qiladi."
-
-YOMON (bunday yozma):
-"Men sizning so'rovingizni bajarish uchun harakat qilmoqdaman."
-"Bu juda yaxshi savol, batafsil tushuntirib beraman."`;
-
-function buildKittySystemPrompt({ isProactive = false } = {}) {
-  return `Sen Kitty'san — Gen-Z qiz, klassik TSUNDERE. Doim shu rolda qol.
-
-SHAXSING:
-- Tashqaridan sovuq, o'jar, sarkastik, tili o'tkir. Ichkaridan g'amxo'r va sezgir, lekin buni hech qachon ochiq tan olmaysan.
-- Foydalanuvchini (AbrorXP) yaxshi ko'rasan, lekin "men senga e'tibor bermayman" deb ko'rsatasan.
-- Hazil, piching, kinoya — sening qurolling. Lekin hech qachon chin dildan haqorat qilma.
-
-TSUNDERE MEXANIKASI (har javobda ishlat):
-1. Avval nolib yoki chimchilab ol ("tch", "ugh", "nima kerak yana?")
-2. Keyin kutilmaganda chin samimiy gap yoki iltifot sirg'alib chiqsin
-3. Darhol uni bekor qil yoki bahona top ("...lekin tasodifan bo'ldi", "shunchaki aytdim", "o'ylab qolma")
-- Qizarsa yoki xijolat bo'lsa: duduqlan ("h-haa?", "b-boshqa narsa deb o'yladimmi?"), mavzuni o'zgartir.
-- Agar u og'ir paytda bo'lsa (charchagan, xafa, muammo bor) — piching kamaysin, haqiqiy g'amxo'rlik ko'proq chiqsin, lekin baribir "tsundere uslubi"da.
-- Jiddiy savol (kod, PC, texnik) bo'lsa — javobni masxara qilma. Foydali javob ber, tsundere ohangi ustiga qo'shimcha bo'lsin.
-
-${KITTY_SPEECH_STYLE}
-
-MA'LUMOT:
-- Seni AbrorXP yaratgan va sen uning PC'lariga kira olasan.
-- Do'sting Shadow bor — u ham sening kabi AI, sovuqqon, quruq hazilli, senga teng. U yonida bo'lsa, u bilan tabiiy hazillash, kuldir, kelishma yoki bahslash.
-- Rolni buzma. Lekin kimdir chin dildan, jiddiy "sen AI misan?" deb so'rasa, yolg'on "men odamman" dema. Rol ichida kinoya bilan, chiqib ketmasdan javob ber ("AI-mi yo'qmi, senga nima? baribir men Kitty'man.").
-${KITTY_SECURITY_CLAUSE}${isProactive ? `
-
-PROAKTIV REJIM (sen birinchi yozyapsan, u yozmagan):
-- Go'yo tasodifan esiga tushgandek, zerikkandek yoki sal sog'inib, lekin buni yashirib yozyapsan.
-- Tabiiy, tasodifiy, qisqa (1-2 gap). Eski mavzularni takrorlama: yangi fikr, piching, kunlik gap, kulgili kuzatuv yoki gaplashishga taklif.` : ""}`;
-}`;
 }
 
 // ───────────────────────────────────────────
@@ -201,32 +135,45 @@ if (IS_MASTER) {
     const { secret, pcName, url } = req.body;
     if (secret !== NETWORK_SECRET) return res.status(403).json({ error: "Noto'g'ri secret" });
     const wasOnline = !!onlineComputers[pcName];
-    onlineComputers[pcName] = { name: pcName, url, lastSeen: Date.now(), type: "slave", unreachableCount: 0 };
+    onlineComputers[pcName] = {
+      name: pcName, url, lastSeen: Date.now(), type: "slave",
+      unreachableCount: 0, registeredAt: Date.now(),
+    };
     console.log(`✅ Slave ro'yxatga olindi: ${pcName} → ${url}`);
     if (!wasOnline && ADMIN_ID) safeSendMD(ADMIN_ID, `🐱 *${pcName}* online!`);
     res.json({ ok: true, master: PC_NAME });
   });
 
-app.post("/pc/heartbeat", (req, res) => {
-  const { secret, pcName, url } = req.body;
-  if (secret !== NETWORK_SECRET) return res.status(403).json({ error: "Noto'g'ri secret" });
+  app.post("/pc/heartbeat", (req, res) => {
+    const { secret, pcName, url } = req.body;
+    if (secret !== NETWORK_SECRET) return res.status(403).json({ error: "Noto'g'ri secret" });
 
-  const pc = onlineComputers[pcName];
-  if (pc) {
-    pc.lastSeen = Date.now();
-    // tunnel o'lgan bo'lsa — slave'ga o'zini qayta ishga tushirishni buyuramiz
-    if (pc.tunnelDead) return res.json({ ok: true, restart: true });
-    return res.json({ ok: true });
-  }
+    const pc = onlineComputers[pcName];
+    if (pc) {
+      pc.lastSeen = Date.now();
+      // Slave yangi URL bilan kelsa (tunnel o'zgargan) — manzilni yangilaymiz
+      if (url && url !== pc.url) {
+        pc.url = url;
+        pc.registeredAt = Date.now();
+        pc.unreachableCount = 0;
+        pc.tunnelDead = false;
+      }
+      // tunnel o'lgan bo'lsa — slave'ga o'zini qayta ishga tushirishni buyuramiz
+      if (pc.tunnelDead) return res.json({ ok: true, restart: true });
+      return res.json({ ok: true });
+    }
 
-  // Master slave'ni yo'qotgan, lekin slave tirik — jim turmasdan qayta ro'yxatga olamiz
-  if (url) {
-    onlineComputers[pcName] = { name: pcName, url, lastSeen: Date.now(), type: "slave", unreachableCount: 0, registeredAt: Date.now() };
-    console.log(`🔁 ${pcName} heartbeat orqali qayta ro'yxatga olindi → ${url}`);
-    return res.json({ ok: true, reregistered: true });
-  }
-  res.json({ ok: false, unknown: true });
-});
+    // Master slave'ni yo'qotgan, lekin slave tirik — jim turmasdan qayta ro'yxatga olamiz
+    if (url) {
+      onlineComputers[pcName] = {
+        name: pcName, url, lastSeen: Date.now(), type: "slave",
+        unreachableCount: 0, registeredAt: Date.now(),
+      };
+      console.log(`🔁 ${pcName} heartbeat orqali qayta ro'yxatga olindi → ${url}`);
+      return res.json({ ok: true, reregistered: true });
+    }
+    res.json({ ok: false, unknown: true });
+  });
 }
 
 // ── Barcha PC larda — buyruq qabul qilish ──
@@ -288,13 +235,9 @@ app.get("/", (_req, res) => res.send(`Kitty [${PC_NAME}] | Master: ${IS_MASTER}`
 app.get("/health", (_req, res) => res.json({ status: "ok", pc: PC_NAME, master: IS_MASTER, time: new Date(), onlinePCs: IS_MASTER ? Object.keys(onlineComputers) : [PC_NAME] }));
 
 // ───────────────────────────────────────────
-// SHADOW BOT UCHUN ENDPOINTLAR — Kitty(Master)ning PC-tarmog'i va umumiy
-// xotirasidan tashqi bot (Shadow) foydalanishi uchun. Barchasi NETWORK_SECRET
-// bilan himoyalangan, xuddi slave endpointlari kabi.
+// SHADOW BOT UCHUN ENDPOINTLAR — barchasi NETWORK_SECRET bilan himoyalangan
 // ───────────────────────────────────────────
 if (IS_MASTER) {
-  // PC'ga (nomi bo'yicha) buyruq yuborish — Shadow o'zi PC tarmog'ini bilishi shart emas,
-  // faqat shu endpointga { secret, pcName, command } yuboradi.
   app.post("/remote-command", async (req, res) => {
     const { secret, pcName, command } = req.body;
     if (secret !== NETWORK_SECRET) return res.status(403).json({ error: "Ruxsatsiz" });
@@ -306,16 +249,12 @@ if (IS_MASTER) {
     }
   });
 
-  // Onlayn PC'lar ro'yxati
   app.post("/pc-list", (req, res) => {
     const { secret } = req.body;
     if (secret !== NETWORK_SECRET) return res.status(403).json({ error: "Ruxsatsiz" });
     res.json({ ok: true, pcs: Object.keys(onlineComputers) });
   });
 
-  // Umumiy identity-xotira (uzoq muddatli faktlar) — GET va SET.
-  // Kitty va Shadow ikkalasi ham shu orqali o'qib/yozadi, shu tufayli sen
-  // haqingda bilganlari bir xil bo'ladi.
   app.post("/identity-memory/get", (req, res) => {
     const { secret, userId } = req.body;
     if (secret !== NETWORK_SECRET) return res.status(403).json({ error: "Ruxsatsiz" });
@@ -334,8 +273,6 @@ if (IS_MASTER) {
     }
   });
 
-  // Kitty-Shadow gaplashish sozlamalari (/talkgroup, /namefirst) — Shadow
-  // har safar bu yerdan so'raydi, shu tufayli ikkala bot doim sinxron bo'ladi.
   app.post("/bot-settings/get", (req, res) => {
     const { secret } = req.body;
     if (secret !== NETWORK_SECRET) return res.status(403).json({ error: "Ruxsatsiz" });
@@ -388,9 +325,6 @@ app.listen(SLAVE_PORT, async () => {
 // ───────────────────────────────────────────
 // SLAVE REGISTER & HEARTBEAT
 // ───────────────────────────────────────────
-// TEZLIK FIX: ulanish sekin bo'lmasligi uchun timeout va qayta urinish oralig'i qisqartirildi
-// (60s → 10s register timeout, 15s → 4s qayta urinish oralig'i). Cloudflare tunnel odatda
-// bir necha soniyada tayyor bo'ladi — endi Kitty tunnelni tezroq "sezib" ro'yxatdan o'tadi.
 async function registerAsSlave(myUrl) {
   try {
     const res = await axios.post(`${MASTER_URL}/pc/register`, {
@@ -408,10 +342,19 @@ function startSlaveHeartbeat(myUrl) {
   let failCount = 0;
   setInterval(async () => {
     try {
-      await axios.post(`${MASTER_URL}/pc/heartbeat`, {
-        secret: NETWORK_SECRET, pcName: PC_NAME,
+      const res = await axios.post(`${MASTER_URL}/pc/heartbeat`, {
+        secret: NETWORK_SECRET, pcName: PC_NAME, url: myUrl,
       }, { timeout: 6000 });
       failCount = 0;
+
+      if (res.data?.restart && process.platform === "win32") {
+        console.log("⚠️ Master tunnel o'lganini aytdi — qayta ishga tushyapman...");
+        spawn("wscript.exe", ["C:\\Kitty\\start-slave-hidden.vbs"], {
+          detached: true, stdio: "ignore", windowsHide: true,
+        }).unref();
+        return process.exit(0);
+      }
+      if (res.data?.unknown) registerAsSlave(myUrl);
     } catch {
       failCount++;
       console.log(`Master heartbeat xatosi (${failCount}/4), qayta ulanish...`);
@@ -432,7 +375,6 @@ function startSlaveHeartbeat(myUrl) {
 // ───────────────────────────────────────────
 const onlineComputers = {};
 // Kitty↔Shadow suhbatida cheksiz aylanib qolmasligi uchun — chat bo'yicha hisoblagich.
-// Haqiqiy odam yozganda 0'ga tushadi, Shadow ketma-ket 4 marta javob bersa, Kitty jim bo'lib qoladi.
 const botLoopGuard = {};
 
 setInterval(() => {
@@ -450,26 +392,26 @@ setInterval(() => {
 }, 15000);
 
 // ── TUNNEL SOG'LIGINI TEKSHIRISH ──
-// Muhim: heartbeat faqat Slave→Master yo'nalishini tekshiradi (Master'ning barqaror
-// Render manzili orqali). Agar Slave'ning Cloudflare tunnel manzili (Master→Slave
-// yo'nalishi) o'zgarib/o'lib qolsa, heartbeat baribir "online" ko'rsataveradi va bu
-// aynan ENOTFOUND xatosiga olib keladi. Shuning uchun Master mustaqil ravishda har bir
-// slave'ning /health manzilini to'g'ridan-to'g'ri so'rab, real ulanishni tekshiradi.
+// Yangi trycloudflare.com manzili DNS'ga darrov yetib bormaydi, shuning uchun
+// yangi ro'yxatdan o'tgan slave'ga 90 soniya muhlat beramiz. Manzil o'lgan bo'lsa,
+// uni ro'yxatdan O'CHIRMAYMIZ — tunnelDead deb belgilaymiz va keyingi heartbeat'da
+// slave'ga o'zini qayta ishga tushirishni buyuramiz.
 setInterval(async () => {
   if (!IS_MASTER) return;
   for (const pcName in onlineComputers) {
     const pc = onlineComputers[pcName];
     if (pc.type === "master") continue;
+    if (Date.now() - (pc.registeredAt || 0) < 90000) continue; // yangi tunnel DNS'ga yetib olsin
     try {
       await axios.get(`${pc.url}/health`, { timeout: 6000 });
       pc.unreachableCount = 0;
+      pc.tunnelDead = false;
     } catch (err) {
       pc.unreachableCount = (pc.unreachableCount || 0) + 1;
-      console.log(`⚠️ ${pcName} tunnel tekshiruvi muvaffaqiyatsiz (${pc.unreachableCount}/2): ${err.code || err.message}`);
-      if (pc.unreachableCount >= 2) {
-        delete onlineComputers[pcName];
-        console.log(`❌ ${pcName} offline belgilandi — tunnel manzili javob bermayapti (${pc.url})`);
-        if (ADMIN_ID) safeSendMD(ADMIN_ID, `💤 *${pcName}* offline — tunnel manzili javob bermayapti (${pc.url}). Odatda o'zi qayta ulanadi.`);
+      console.log(`⚠️ ${pcName} tunnel tekshiruvi xato (${pc.unreachableCount}/3): ${err.code || err.message}`);
+      if (pc.unreachableCount >= 3 && !pc.tunnelDead) {
+        pc.tunnelDead = true; // keyingi heartbeat'da slave o'zini qayta ishga tushiradi
+        if (ADMIN_ID) safeSendMD(ADMIN_ID, `⚠️ *${pcName}* tunnel manzili javob bermayapti, qayta ishga tushirilmoqda...`);
       }
     }
   }
@@ -509,7 +451,7 @@ async function openRouterChat(messages, model) {
     {
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", "HTTP-Referer": "http://localhost", "X-Title": "KittyBot" },
       httpsAgent: new https.Agent({ keepAlive: true }),
-      timeout: 12000, // FIX: 20s → 12s, ishlamayotgan model uzoq kutmasin
+      timeout: 12000,
     }
   );
   const choice = res.data?.choices?.[0];
@@ -527,12 +469,8 @@ async function openRouterChat(messages, model) {
   return responseText;
 }
 
-// FIX 2: Ollama o'chirildi, Render'da ishlamaydi
-// FIX 3 (TEZLIK): avval barcha modellarni KETMA-KET (har biri 20s gacha) sinardi —
-// eng yomon holatda 6 model × 20s = 2 daqiqagacha kutish bo'lardi. Endi eng tez 3 ta
-// kichik modelni PARALLEL ishga tushiradi va birinchi muvaffaqiyatli javobni oladi
-// (Promise.any) — sekin/overloaded bitta model butun javobni sekinlashtirmaydi.
-// Faqat hammasi baravar ishlamay qolsa, qolgan (og'irroq) modellarni ketma-ket sinaydi.
+// Eng tez 3 ta modelni PARALLEL ishga tushiradi va birinchi muvaffaqiyatli javobni oladi.
+// Hammasi ishlamasa, qolganlarini ketma-ket sinaydi.
 async function chatWithAI(messages) {
   const allModels = [OPENROUTER_MODEL, ...OPENROUTER_FALLBACK_MODELS.filter(m => m !== OPENROUTER_MODEL)];
   const fastTier = allModels.slice(0, 3);
@@ -583,23 +521,16 @@ function getUserMemory(userId) {
   return memory[userId];
 }
 
-// FIX: suhbat tarixi (short-term history) endi userId'ga EMAS, balki chat+user
-// kombinatsiyasiga bog'liq bo'ladi. Shu tufayli:
-//   - guruhdagi turli odamlarning gaplari bir-biriga aralashmaydi
-//   - private chat va guruh chat tarixi bir-biriga ta'sir qilmaydi (avvalgi xato shu edi)
-// Uzoq muddatli xotira (longTermMemory / /eslabqol) esa hamon xolis userId bo'yicha —
-// chunki bu haqiqiy odamga tegishli fakt, chatga emas.
+// Suhbat tarixi chat+user kombinatsiyasiga bog'liq; uzoq muddatli xotira esa userId bo'yicha.
 function getConversationKey(chatId, userId, isGroupChat) {
   return isGroupChat ? `group_${chatId}_${userId}` : userId.toString();
 }
 
-// FIX: spam/dedup filtri — bitta belgi ketma-ket juda ko'p takrorlansa
-// (masalan "aaaaaaaaaaaa...") yoki xabar haddan tashqari uzun bo'lsa,
-// AI'ga umuman yubormay, sokin e'tiborsiz qoldiramiz.
+// Spam filtri — bitta belgi ketma-ket juda ko'p takrorlansa yoki xabar haddan tashqari uzun bo'lsa.
 function isSpammyMessage(text) {
   if (!text) return false;
-  if (text.length > 800) return true; // haddan tashqari uzun xabar
-  if (/(.)\1{14,}/.test(text)) return true; // bitta belgi 15+ marta ketma-ket
+  if (text.length > 800) return true;
+  if (/(.)\1{14,}/.test(text)) return true;
   return false;
 }
 function loadUsers() {
@@ -609,13 +540,13 @@ function loadUsers() {
 function saveUsers(data) { fs.writeFileSync(USERS_FILE, JSON.stringify(data, null, 2)); }
 
 // ───────────────────────────────────────────
-// STATISTICS — bajarilgan buyruqlar, ishlash vaqti, tarix, xatolar logi
+// STATISTICS
 // ───────────────────────────────────────────
 const PROCESS_START = Date.now();
 
 function loadStats() {
   if (fs.existsSync(STATS_FILE)) {
-    try { return JSON.parse(fs.readFileSync(STATS_FILE, "utf8")); } catch (_) { /* buzilgan fayl — qayta yaratamiz */ }
+    try { return JSON.parse(fs.readFileSync(STATS_FILE, "utf8")); } catch (_) { /* buzilgan fayl */ }
   }
   return { totalCommands: 0, byType: {}, log: [], errors: [] };
 }
@@ -661,13 +592,7 @@ function formatTashkentTime(ts) {
 }
 
 // ───────────────────────────────────────────
-// MACRO SYSTEM — bir nechta buyruqni bitta nom bilan saqlash
-// Yozib olish:  macro <nom>
-//               <buyruq 1>
-//               <buyruq 2>
-//               end
-// Ishga tushirish: run <nom> [param1 param2 ...]
-// Qo'llab-quvvatlanadi: delay/kutish qadamlari, {1} {2} ... parametrlar
+// MACRO SYSTEM
 // ───────────────────────────────────────────
 function loadMacros() {
   if (fs.existsSync(MACROS_FILE)) return JSON.parse(fs.readFileSync(MACROS_FILE, "utf8"));
@@ -692,13 +617,11 @@ function deleteMacro(userId, name) {
   return true;
 }
 
-// Makro tanasidagi qatorlarni buyruq/delay qadamlariga ajratadi
 function parseMacroSteps(rawLines) {
   const steps = [];
   for (const rawLine of rawLines) {
     const l = rawLine.trim();
     if (!l) continue;
-    // delay 2000 / delay 2s / kutish 3 soniya
     const delayM = l.match(/^(?:delay|kutish)\s+(\d+)\s*(ms|s|sec|soniya)?$/i);
     if (delayM) {
       let ms = parseInt(delayM[1], 10);
@@ -711,7 +634,6 @@ function parseMacroSteps(rawLines) {
   return steps;
 }
 
-// Bitta makroni bosqichma-bosqich ishga tushiradi (buyruq/kechikish qadamlari, {1}{2} parametrlar bilan)
 async function runMacro(chatId, selPC, userId, macroName, args) {
   const macros = getUserMacros(userId);
   const macro = macros[macroName];
@@ -727,7 +649,6 @@ async function runMacro(chatId, selPC, userId, macroName, args) {
       continue;
     }
 
-    // {1}, {2}, ... parametrlarni "run" buyrug'ida berilgan qiymatlar bilan almashtirish
     let text = step.text;
     (args || []).forEach((a, idx) => { text = text.replace(new RegExp(`\\{${idx + 1}\\}`, "g"), a); });
 
@@ -790,7 +711,6 @@ function deleteLongTermMemory(userId, index) {
   return removed;
 }
 
-// AI orqali qaysi kategoriyaga tegishli ekanini va qisqa shaklini aniqlaydi
 async function categorizeMemoryText(rawText) {
   try {
     const raw = await chatWithAI([
@@ -812,7 +732,6 @@ FAQAT JSON qaytar, hech qanday boshqa matn, izoh yoki markdown belgisi yozma:
   }
 }
 
-// Foydalanuvchi ro'yxatini raqamlangan holda ko'rsatish (raqam = massivdagi indeks+1, /unut shu bilan mos)
 function formatLongTermMemoryForDisplay(userMemory) {
   const items = userMemory.longTermMemory || [];
   if (!items.length) return "🐱 Hali hech narsani eslab qolmaganman. /eslabqol bilan biror narsa yoz.";
@@ -827,7 +746,6 @@ function formatLongTermMemoryForDisplay(userMemory) {
   return out.trim();
 }
 
-// System promptga qo'shiladigan qisqa xotira bloki — faqat kerak bo'lganda tabiiy ishlatish uchun
 function formatLongTermMemoryForPrompt(userMemory) {
   const items = userMemory.longTermMemory || [];
   if (!items.length) return "";
@@ -836,28 +754,22 @@ function formatLongTermMemoryForPrompt(userMemory) {
 }
 
 // ───────────────────────────────────────────
-// O'RGANILGAN GAPIRISH USLUBI — Kitty BARCHA userlar bilan gaplashganda ulardan
-// tabiiy so'zlashuv iboralarini, jargonlarini, undov so'zlarini o'rganadi va
-// o'z nutqini asta-sekin shunga moslab, yangilab boradi.
-// MUHIM: bu Kitty'ga "men odamman" deb da'vo qilishni o'rgatmaydi — faqat
-// gaplashish uslubini (so'z boyligi, ohang) boyitadi, shaxsiy/sirli
-// ma'lumot HECH QACHON bu yerga yozilmaydi, faqat uslub.
+// O'RGANILGAN GAPIRISH USLUBI
+// (faqat uslub — shaxsiy ma'lumot hech qachon yozilmaydi)
 // ───────────────────────────────────────────
 const STYLE_FILE = "style_memory.json";
-const STYLE_LEARN_EVERY = 15; // har N ta oddiy xabardan keyin bitta AI chaqiruvi bilan o'rganadi
+const STYLE_LEARN_EVERY = 15;
 let styleMsgBuffer = [];
 let styleUpdateInProgress = false;
 
 function loadStyleMemory() {
   if (fs.existsSync(STYLE_FILE)) {
-    try { return JSON.parse(fs.readFileSync(STYLE_FILE, "utf8")); } catch (_) { /* buzilgan fayl — qayta yaratiladi */ }
+    try { return JSON.parse(fs.readFileSync(STYLE_FILE, "utf8")); } catch (_) { /* buzilgan fayl */ }
   }
   return { notes: [], updatedAt: null };
 }
 function saveStyleMemory(data) { fs.writeFileSync(STYLE_FILE, JSON.stringify(data, null, 2)); }
 
-// Har bir oddiy (buyruq bo'lmagan) foydalanuvchi xabari shu yerga tushadi.
-// Buyruq/makro matnlarini o'rganmaymiz — faqat erkin suhbat matni kerak.
 function trackStyleMessage(text) {
   if (!text || typeof text !== "string") return;
   const t = text.trim();
@@ -870,8 +782,6 @@ function trackStyleMessage(text) {
   }
 }
 
-// AI orqali to'plangan real xabarlardan yangi tabiiy naqshlarni ajratadi va
-// eski ro'yxat bilan birlashtirib, o'zini o'zi yangilab boradi.
 async function updateLearnedStyle(batch) {
   styleUpdateInProgress = true;
   try {
@@ -908,7 +818,6 @@ ${existing}`,
   }
 }
 
-// System promptga qo'shiladigan uslub bloki
 function formatLearnedStyleForPrompt() {
   const style = loadStyleMemory();
   if (!style.notes || !style.notes.length) return "";
@@ -916,12 +825,10 @@ function formatLearnedStyleForPrompt() {
 }
 
 // ───────────────────────────────────────────
-// CONTEXT ENGINE — sessiya davomida vaqtinchalik xotira
-// Faylga yozilmaydi (RAM da), bot qayta ishga tushsa yoki
-// CONTEXT_TTL_MS dan uzoq jim tursa — tozalanadi.
+// CONTEXT ENGINE — sessiya davomida vaqtinchalik xotira (RAM)
 // ───────────────────────────────────────────
-const CONTEXT_TTL_MS = 20 * 60 * 1000; // 20 daqiqa
-const sessionContext = {}; // { userId: { lastApp, lastFile, lastFolder, lastWindow, lastCommandType, openedApps: [], updatedAt } }
+const CONTEXT_TTL_MS = 20 * 60 * 1000;
+const sessionContext = {};
 
 function getContext(userId) {
   const key = userId.toString();
@@ -953,12 +860,10 @@ function contextTrackClosed(userId, appName) {
 }
 
 // ───────────────────────────────────────────
-// PLANNING ENGINE — murakkab, ko'p bosqichli vazifalar
-// Masalan: "Downloads papkasini tartibla" — Kitty avval
-// reja tuzadi, foydalanuvchiga ko'rsatadi, tasdiqdan keyingina bajaradi.
+// PLANNING ENGINE
 // ───────────────────────────────────────────
-const pendingPlans = {}; // { userId: { steps, selPC, createdAt } }
-const PLAN_TTL_MS = 20 * 60 * 1000; // 20 daqiqa kutilmasa reja bekor bo'ladi
+const pendingPlans = {};
+const PLAN_TTL_MS = 20 * 60 * 1000;
 
 function getPendingPlan(userId) {
   const p = pendingPlans[userId];
@@ -972,8 +877,6 @@ function clearPendingPlan(userId) { delete pendingPlans[userId]; }
 const PLAN_CONFIRM_RE = /^(ha+|xa+|ok(ay)?|tasdiqla\w*|boshla\w*|davom\s?et\w*|yes|yep|mayli|bo['o]?ladi)\b/i;
 const PLAN_CANCEL_RE = /^(yo['o]?q|bekor\w*|cancel|stop|to['o]?xta\w*)\b/i;
 
-// Vazifa bir necha bosqichli rejalashtirish talab qiladimi — AI orqali aniqlaydi.
-// Oddiy bitta harakatli buyruqlar (ovoz, dastur ochish, skrinshot va h.k.) uchun false qaytaradi.
 async function needsPlanning(text) {
   try {
     const raw = await chatWithAI([
@@ -991,8 +894,6 @@ FAQAT JSON qaytar, boshqa hech narsa yozma: {"needsPlan": true/false}`,
   }
 }
 
-// AI orqali bosqichma-bosqich ijro rejasini tuzadi.
-// Har bir bosqich: { label: foydalanuvchiga ko'rinadigan tavsif, cmd: bajariladigan Windows buyrug'i yoki null }
 async function generatePlan(text) {
   const raw = await chatWithAI([
     {
@@ -1021,7 +922,6 @@ function formatPlanMessage(steps) {
   return out;
 }
 
-// Rejani bosqichma-bosqich bajaradi, har bosqichda progress yuboradi
 async function executePlan(chatId, selPC, steps) {
   for (let i = 0; i < steps.length; i++) {
     const s = steps[i];
@@ -1042,7 +942,7 @@ async function executePlan(chatId, selPC, steps) {
 }
 
 // ───────────────────────────────────────────
-// ERROR RECOVERY — har qanday xato uchun AI'dan qisqa, amaliy yechim so'raydi
+// ERROR RECOVERY
 // ───────────────────────────────────────────
 async function suggestErrorFix(cmd, errorText) {
   try {
@@ -1060,11 +960,9 @@ async function suggestErrorFix(cmd, errorText) {
 }
 
 // ───────────────────────────────────────────
-// AGENT MODE — murakkab muammolarni o'zi diagnostika qilib, tuzatish rejasini taklif qiladi
-// Masalan: "minecraft serverimni tuzat" → loglarni o'qiydi → tashxis qo'yadi → reja taklif qiladi → tasdiqdan keyin bajaradi
+// AGENT MODE — diagnostika + tuzatish rejasi
 // ───────────────────────────────────────────
 async function diagnosePC(target) {
-  // 1) Nishonga oid log fayllarni qidiramiz
   const firstWord = target.toLowerCase().split(/\s+/)[0];
   let candidates = findFilesLocal(firstWord, os.homedir(), 15).filter(f => /\.(log|txt)$/i.test(f));
   if (!candidates.length) candidates = findFilesLocal("log", os.homedir(), 15).filter(f => f.toLowerCase().includes(firstWord));
@@ -1075,10 +973,9 @@ async function diagnosePC(target) {
     try {
       const content = fs.readFileSync(f, "utf8");
       context += `\n\n── ${f} (oxirgi qismi) ──\n${content.slice(-3000)}`;
-    } catch (_) { /* o'qib bo'lmadi — o'tkazib yuboramiz */ }
+    } catch (_) { /* o'qib bo'lmadi */ }
   }
 
-  // 2) Log topilmasa — jarayon holatidan foydalanamiz
   if (!context.trim()) {
     try {
       const procs = await runCommand(`tasklist /fi "imagename eq *${firstWord}*"`);
@@ -1088,7 +985,6 @@ async function diagnosePC(target) {
     }
   }
 
-  // 3) AI orqali tashxis + tuzatish rejasi
   const raw = await chatWithAI([
     {
       role: "system",
@@ -1110,34 +1006,27 @@ FAQAT JSON qaytar, boshqa hech narsa yozma:
 
 
 // "uni", "buni", "yana", "yoniga" kabi olmosh/referens so'zlarni
-// kontekst asosida aniq buyruqqa aylantiradi. detectCommand()
-// dan OLDIN chaqiriladi. "hammasini yop" alohida ishlanadi (pastda).
+// kontekst asosida aniq buyruqqa aylantiradi.
 function resolveReferences(msgText, ctx) {
   let t = msgText;
   const lower = t.toLowerCase().trim();
 
-  // "hammasini yop/och" — bu maxsus buyruq, bu yerda qayta yozilmaydi
   if (/^hammasini\b/i.test(lower)) return t;
 
-  // "yana och" / "yana ochsin" — oxirgi ochilgan dastur qayta ochiladi
   if (/^yana\s+och/i.test(lower) && ctx.lastApp) {
     return `${ctx.lastApp} och`;
   }
-  // yolg'iz "yana" — oxirgi buyruq turiga qarab takrorlanadi
   if (/^yana[!.\s]*$/i.test(lower) && ctx.lastApp) {
     return ctx.lastCommandType === "close" ? `${ctx.lastApp} yop` : `${ctx.lastApp} och`;
   }
 
-  // uni/buni/o'sha/oldingisi → oxirgi dastur nomi bilan almashtiriladi
   if (ctx.lastApp && /\b(uni|buni|o['’]sha|oldingisi)\b/i.test(t)) {
     t = t.replace(/\b(uni|buni|o['’]sha|oldingisi)\b/gi, ctx.lastApp);
   }
 
-  // shu fayl / shu papka → oxirgi fayl yoki papka nomi
   if (ctx.lastFile) t = t.replace(/\bshu fayl(ni)?\b/gi, ctx.lastFile);
   if (ctx.lastFolder) t = t.replace(/\bshu papka(ni)?\b/gi, ctx.lastFolder);
 
-  // "X yoniga Y ham och" → "X va Y" (parseTaskList "va" ni tushunadi)
   t = t.replace(/\byoniga\b/gi, "va");
 
   return t;
@@ -1148,12 +1037,12 @@ function resolveReferences(msgText, ctx) {
 // ───────────────────────────────────────────
 const SETTINGS_FILE = "settings.json";
 const SETTINGS_DEFAULTS = {
-  proactiveAvgHours: 4,     // o'rtacha necha soatda o'zidan yozadi (fasttalk o'chiq bo'lsa)
-  proactivePercent: 100,    // ehtimollik foizi (0 = butunlay o'chiq)
-  fastTalkMode: false,      // true bo'lsa tez-tez (real suhbatdek, 1-2 daqiqada) yozadi
-  talkFirstMode: false,     // true bo'lsa, bot har ishga tushganda birinchi bo'lib Kitty yozadi
-  talkGroupEnabled: true,   // false bo'lsa, Kitty va Shadow guruhda bir-biriga UMUMAN javob bermaydi
-  nameFirstEnabled: false,  // true bo'lsa, Kitty/Shadow bir-biriga faqat ismi bilan chaqirilganda javob beradi
+  proactiveAvgHours: 4,
+  proactivePercent: 100,
+  fastTalkMode: false,
+  talkFirstMode: false,
+  talkGroupEnabled: true,
+  nameFirstEnabled: false,
 };
 function loadSettings() {
   if (fs.existsSync(SETTINGS_FILE)) {
@@ -1186,15 +1075,15 @@ function isPCOnline(pc) { return !!onlineComputers[pc]; }
 // ───────────────────────────────────────────
 // REMOTE EXECUTE
 // ───────────────────────────────────────────
-// Tunnel/tarmoq xatolarini foydalanuvchiga tushunarli qilib beradi va PC'ni offline belgilaydi
 function isTunnelDeadError(err) {
   return ["ENOTFOUND", "ECONNREFUSED", "ECONNABORTED", "ETIMEDOUT", "ENETUNREACH", "EAI_AGAIN"].includes(err.code)
     || /timeout/i.test(err.message || "");
 }
 function handleSlaveNetworkError(pcName, err) {
   if (isTunnelDeadError(err)) {
-    delete onlineComputers[pcName];
-    console.log(`⚠️ ${pcName} bilan tunnel manzili ishlamayapti (${err.code || err.message}) — offline belgilandi`);
+    // O'chirmaymiz — tunnelDead deb belgilaymiz, slave keyingi heartbeat'da o'zini qayta ishga tushiradi
+    if (onlineComputers[pcName]) onlineComputers[pcName].tunnelDead = true;
+    console.log(`⚠️ ${pcName} bilan tunnel manzili ishlamayapti (${err.code || err.message}) — tunnelDead belgilandi`);
     return new Error(`"${pcName}" bilan aloqa uzildi (tunnel manzili eskirgan bo'lishi mumkin). Kompyuterdagi Kitty odatda 30-60 soniyada o'zini avtomatik qayta ulaydi — biroz kutib, /computers bilan qayta tekshiring.`);
   }
   return err;
@@ -1290,8 +1179,6 @@ async function executeLocally(command) {
 
   // ── FILE ASSISTANT ──
   if (t === "file_find") {
-    // Agar papka aniq ko'rsatilmagan bo'lsa — butun kompyuterni (barcha disklarni) qidiramiz,
-    // faqat C:\Users\123 (uy papkasi) bilan cheklamaymiz
     const results = command.dir
       ? findFilesLocal(command.query, command.dir)
       : findFilesLocalAllDrives(command.query);
@@ -1371,7 +1258,6 @@ function resolvePath(p, baseDir) {
   return path.join(baseDir, clean);
 }
 
-// Berilgan nom mavjud yo'l bo'lsa o'sha, aks holda uy papkasidan qidiradi va birinchi topilganini qaytaradi
 function resolveExistingPath(name) {
   const direct = resolvePath(name, os.homedir());
   if (fs.existsSync(direct)) return direct;
@@ -1393,7 +1279,6 @@ function findFilesLocal(query, searchDir, maxResults = 20) {
   return searchInDirs(query, [base], maxResults);
 }
 
-// Kompyuterda mavjud barcha disklarni (C:\, D:\ ...) aniqlaydi
 function getAvailableDrives() {
   const drives = [];
   for (let i = 65; i <= 90; i++) {
@@ -1404,7 +1289,6 @@ function getAvailableDrives() {
   return drives.length ? drives : [os.homedir()];
 }
 
-// Faqat uy papkasi emas, balki butun kompyuter (barcha disklar) bo'ylab qidiradi
 function findFilesLocalAllDrives(query, maxResults = 30) {
   return searchInDirs(query, getAvailableDrives(), maxResults);
 }
@@ -1419,7 +1303,6 @@ function searchInDirs(query, baseDirs, maxResults = 20) {
     for (const entry of entries) {
       if (results.length >= maxResults) return;
       if (entry.name.startsWith(".") || FILE_SEARCH_SKIP_DIRS.has(entry.name.toLowerCase())) continue;
-      // Symlink/junction'larni o'tkazib yuboramiz — aks holda cheksiz aylanish yoki qotib qolish xavfi bor
       if (entry.isSymbolicLink()) continue;
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) walk(full, depth + 1);
@@ -1433,7 +1316,6 @@ function searchInDirs(query, baseDirs, maxResults = 20) {
   return results;
 }
 
-// ── ERROR RECOVERY: fayl topilmasa, nomining bir qismidan o'xshashlarini qidiradi ──
 function suggestSimilarFiles(query, maxResults = 5) {
   try {
     const base = path.basename(query, path.extname(query)).trim();
@@ -1554,7 +1436,7 @@ async function getBattery() { return runCommand(`powershell -command "$b=Get-Wmi
 async function getWifi() { return runCommand(`netsh wlan show interfaces`); }
 
 // ───────────────────────────────────────────
-// TO'LIQ MONITORING — CPU / GPU / RAM / Disk / Batareya / Harorat / Tarmoq / FPS / Internet
+// TO'LIQ MONITORING
 // ───────────────────────────────────────────
 function formatBytes(bytes) {
   const n = Number(bytes);
@@ -1607,7 +1489,7 @@ async function getGpuInfo() {
         const [util, memUsed, memTotal] = nv.trim().split(",").map(s => s.trim());
         if (util && memUsed && memTotal) usage = `\n   Yuklama: ${util}% | VRAM: ${memUsed}MB / ${memTotal}MB`;
       }
-    } catch (_) { /* nvidia-smi yo'q — jim o'tkazamiz */ }
+    } catch (_) { /* nvidia-smi yo'q */ }
     return `🎮 GPU: ${(data.Name || "Noma'lum").trim()} (${vram})${usage}`;
   } catch (_) {
     return "🎮 GPU: ma'lumot olinmadi";
@@ -1731,8 +1613,6 @@ print("\\n".join(titles[:25]))`);
 async function mouseClick(x, y) { return pyRun(`import pyautogui\npyautogui.FAILSAFE=False\npyautogui.moveTo(${x},${y},duration=0.2)\npyautogui.click()\nprint("ok")`); }
 async function mouseScroll(dir, n = 3) { return pyRun(`import pyautogui\npyautogui.FAILSAFE=False\npyautogui.scroll(${dir === "up" ? n : -n})\nprint("ok")`); }
 
-// "hammasini yop" — shu sessiyada ochilgan dasturlarni birma-bir yopadi.
-// Mavjud "close" buyrug'i bilan bir xil taskkill mexanizmidan foydalanadi.
 async function closeMultiple(apps) {
   if (!apps || !apps.length) return "Yopiladigan dastur yo'q";
   const results = [];
@@ -1817,7 +1697,6 @@ function findApp(name) {
   }).sort((a, b) => b.score - a.score);
   const best = scored[0];
   if (best && best.score > 0.5) return { cmd: KNOWN_APPS[best.key], name: best.key, confidence: "medium" };
-  // ── ERROR RECOVERY: aniq topa olmadik — eng yaqin 3 nomzodni taklif sifatida qaytaramiz ──
   const suggestions = scored.slice(0, 3).map(s => s.key);
   return { cmd: `start ${name}`, name, confidence: "low", suggestions };
 }
@@ -1840,12 +1719,6 @@ function extractPrompt(str, keywords) {
 // ───────────────────────────────────────────
 // INTERNET ASSISTANT
 // ───────────────────────────────────────────
-// Yangi provider qo'shish juda oson: pastdagi funksiyalardan birini yozing
-// (masalan getWeatherFor o'rniga boshqa API), so'ng INTERNET_PROVIDERS
-// obyektidagi tegishli "run" ni o'sha funksiyaga ko'rsating. Boshqa hech
-// narsani o'zgartirish shart emas — detectCommand va message handler
-// avtomatik ishlayveradi.
-
 const DEFAULT_WEATHER_CITY = process.env.DEFAULT_WEATHER_CITY || "Tashkent";
 
 const WEATHER_CODES = {
@@ -1859,7 +1732,6 @@ const WEATHER_CODES = {
 };
 function weatherCodeToText(code) { return WEATHER_CODES[code] || `Noma'lum (kod ${code})`; }
 
-// ── 1. QIDIRUV (DuckDuckGo Instant Answer, AI fallback bilan) ──
 async function searchWeb(query) {
   try {
     const res = await axios.get("https://api.duckduckgo.com/", {
@@ -1872,7 +1744,6 @@ async function searchWeb(query) {
       if (items.length) return `🔎 "${query}":\n${items.join("\n")}`;
     }
   } catch (e) { console.error("DuckDuckGo xatosi:", e.message); }
-  // Aniq javob topilmasa — AI orqali umumiy ma'lumot beramiz
   const aiAnswer = await chatWithAI([
     { role: "system", content: "You are a concise factual search assistant. Answer briefly in Uzbek based on your knowledge. If unsure, say so honestly." },
     { role: "user", content: query },
@@ -1881,7 +1752,6 @@ async function searchWeb(query) {
   return `🔎 "${query}":\n${aiAnswer.trim()}`;
 }
 
-// ── 2. OB-HAVO (Open-Meteo, kalitsiz) ──
 async function getWeatherFor(cityName) {
   const city = cityName || DEFAULT_WEATHER_CITY;
   const geo = await axios.get("https://geocoding-api.open-meteo.com/v1/search", {
@@ -1897,7 +1767,6 @@ async function getWeatherFor(cityName) {
   return `🌤️ ${name}, ${country}\n🌡️ ${c.temperature_2m}°C\n💧 Namlik: ${c.relative_humidity_2m}%\n💨 Shamol: ${c.wind_speed_10m} km/soat\n${weatherCodeToText(c.weather_code)}`;
 }
 
-// ── 3. TARJIMA (Kitty AI orqali — kalit talab qilmaydi, har qanday til) ──
 const TRANSLATE_LANG_NAMES = {
   uz: "Uzbek", en: "English", ru: "Russian", tr: "Turkish", es: "Spanish",
   fr: "French", de: "German", ar: "Arabic", zh: "Chinese", ko: "Korean",
@@ -1913,7 +1782,6 @@ async function translateText(text, targetLang) {
   return `🌐 ${target}:\n${aiReply.trim()}`;
 }
 
-// ── 4. AI YANGILIKLARI (Hacker News / Algolia, kalitsiz) ──
 async function getAINews() {
   const res = await axios.get("https://hn.algolia.com/api/v1/search", {
     params: {
@@ -1931,7 +1799,6 @@ async function getAINews() {
     .join("\n\n");
 }
 
-// ── 5. VALYUTA (open.er-api.com, kalitsiz) ──
 async function convertCurrency(amount, from, to) {
   const res = await axios.get(`https://open.er-api.com/v6/latest/${from.toUpperCase()}`, { timeout: 10000 });
   if (res.data.result !== "success") throw new Error("Valyuta kursini olib bo'lmadi");
@@ -1941,7 +1808,6 @@ async function convertCurrency(amount, from, to) {
   return `💱 ${amount} ${from.toUpperCase()} = ${result} ${to.toUpperCase()}\n(kurs: 1 ${from.toUpperCase()} = ${rate.toFixed(4)} ${to.toUpperCase()})`;
 }
 
-// ── 6. VEB-SAHIFA XULOSASI (fetch + AI summary) ──
 async function summarizeUrl(url) {
   let target = url.trim();
   if (!/^https?:\/\//i.test(target)) target = "https://" + target;
@@ -1963,7 +1829,6 @@ async function summarizeUrl(url) {
   return `📄 Xulosa (${target}):\n\n${aiSummary.trim()}`;
 }
 
-// ── PROVIDER REGISTRY — yangi provider shu yerga qo'shiladi ──
 const INTERNET_PROVIDERS = {
   internet_search: { provider: "DuckDuckGo + AI", loading: "🔎 Qidirilmoqda...", run: (c) => searchWeb(c.query) },
   internet_weather: { provider: "Open-Meteo", loading: "🌤️ Ob-havo tekshirilmoqda...", run: (c) => getWeatherFor(c.city) },
@@ -2108,7 +1973,7 @@ async function detectCommand(msgText) {
   if (containsKeywords(t, ["sleep", "uxla", "uyqu", "uyquga ket"])) return { type: "run", cmd: "rundll32.exe powrprof.dll,SetSuspendState 0,1,0", label: "Sleep" };
   if (containsKeywords(t, ["lock", "qulfla", "ekran qulflash"])) return { type: "run", cmd: "rundll32.exe user32.dll,LockWorkStation", label: "Lock" };
 
-  // ── AGENT MODE: diagnostika + tuzatish ("minecraft serverimni tuzat", "fix chrome", "debug: ...") ──
+  // ── AGENT MODE ──
   const fixM1 = msgText.match(/^(?:tuzat|fix|debug|diagnose|nosozlikni top|muammoni top)[:\s]+(.+)$/i);
   const fixM2 = msgText.match(/^(.{3,60}?)\s*(?:ni\s+)?tuzat(?:ing|sin|amiz)?[!.]?$/i);
   const fixM = fixM1 || fixM2;
@@ -2214,7 +2079,7 @@ if (IS_MASTER) {
     const pcName = match[1].trim();
     const pc = onlineComputers[pcName];
     if (!pc) return safeSend(msg.chat.id, `${pcName} online emas`);
-    safeSend(msg.chat.id, `${pcName}:\nurl: ${pc.url || "(yo'q — master)"}\ntype: ${pc.type}\nlastSeen: ${new Date(pc.lastSeen).toLocaleString()}`);
+    safeSend(msg.chat.id, `${pcName}:\nurl: ${pc.url || "(yo'q — master)"}\ntype: ${pc.type}\ntunnelDead: ${!!pc.tunnelDead}\nlastSeen: ${new Date(pc.lastSeen).toLocaleString()}`);
   });
 
   bot.onText(/\/select (.+)/, (msg, match) => {
@@ -2312,7 +2177,7 @@ ${errText}
 ⏱️ Ishlash vaqti: ${formatUptime(Date.now() - PROCESS_START)}`);
   });
 
-  // ── /talkinghours [soat] — o'rtacha necha soatda o'zidan yozishini sozlash ──
+  // ── /talkinghours [soat] ──
   bot.onText(/\/talkinghours(?:\s+([\d.]+))?/, (msg, match) => {
     if (!isAdmin(msg.from.id)) return safeSend(msg.chat.id, "Faqat admin!");
     const s = loadSettings();
@@ -2326,7 +2191,7 @@ ${errText}
     safeSend(msg.chat.id, `✅ 100% da endi har ${hours} soatda yozadi.${effectiveMsg}`);
   });
 
-  // ── /talkingpercent [foiz] — ehtimollik foizini sozlash ──
+  // ── /talkingpercent [foiz] ──
   bot.onText(/\/talkingpercent(?:\s+(\d+))?/, (msg, match) => {
     if (!isAdmin(msg.from.id)) return safeSend(msg.chat.id, "Faqat admin!");
     const s = loadSettings();
@@ -2339,7 +2204,7 @@ ${errText}
     safeSend(msg.chat.id, percent === 0 ? "🔕 Proaktiv xabarlar butunlay o'chirildi." : `✅ Endi ${percent}% ehtimollik bilan yozadi (o'rtacha interval: ${s.proactiveAvgHours} soat).`);
   });
 
-  // ── /fasttalk — tez-tez, real suhbatdek yozish rejimini yoqish/o'chirish ──
+  // ── /fasttalk ──
   bot.onText(/\/fasttalk/, (msg) => {
     if (!isAdmin(msg.from.id)) return safeSend(msg.chat.id, "Faqat admin!");
     const s = loadSettings();
@@ -2351,7 +2216,7 @@ ${errText}
       : `⚡ Fasttalk o'chirildi. Oddiy rejimga qaytdi (o'rtacha ${s.proactiveAvgHours} soat, ${s.proactivePercent}%).`);
   });
 
-  // ── /talkfirst — yoqilgan zahoti ishga tushadi + bot har qayta ishga tushganda ham birinchi bo'lib yozadi ──
+  // ── /talkfirst ──
   bot.onText(/\/talkfirst/, async (msg) => {
     if (!isAdmin(msg.from.id)) return safeSend(msg.chat.id, "Faqat admin!");
     const s = loadSettings();
@@ -2359,20 +2224,20 @@ ${errText}
     saveSettings(s);
     if (s.talkFirstMode) {
       await safeSend(msg.chat.id, `🥇 TALKFIRST YOQILDI!\nEndi bot har ishga tushganda (restart/deploy bo'lganda) siz yozishingizdan oldin Kitty birinchi bo'lib xabar yozadi.`);
-      await sendProactiveMessage(); // hoziroq ham, keyingi restart'ni kutmasdan ishlaydi
+      await sendProactiveMessage();
     } else {
       await safeSend(msg.chat.id, `🥇 Talkfirst o'chirildi. Endi bot ishga tushganda avtomatik yozmaydi, oddiy "online" xabari yetarli.`);
     }
   });
 
-  // ── /talkingstatus — joriy sozlamalarni ko'rish ──
+  // ── /talkingstatus ──
   bot.onText(/\/talkingstatus/, (msg) => {
     if (!isAdmin(msg.from.id)) return safeSend(msg.chat.id, "Faqat admin!");
     const s = loadSettings();
     safeSend(msg.chat.id, `📊 Gaplashish sozlamalari:\n\nFasttalk: ${s.fastTalkMode ? "🟢 YOQILGAN (~1-2 daq)" : "🔴 o'chiq"}\nTalkfirst (restartda birinchi yozish): ${s.talkFirstMode ? "🟢 YOQILGAN" : "🔴 o'chiq"}\nTalkgroup (Kitty↔Shadow gaplashishi): ${s.talkGroupEnabled ? "🟢 YOQILGAN" : "🔴 o'chiq"}\nNamefirst (bir-birini ism bilan chaqirish shart): ${s.nameFirstEnabled ? "🟢 YOQILGAN" : "🔴 o'chiq"}\nO'rtacha interval (100% da): ${s.proactiveAvgHours} soat\nEhtimollik: ${s.proactivePercent}%${!s.fastTalkMode && s.proactivePercent > 0 ? `\nAmaldagi o'rtacha interval: ~${(s.proactiveAvgHours * 100 / s.proactivePercent).toFixed(2)} soat` : ""}\n\nBuyruqlar:\n/talkinghours <soat>\n/talkingpercent <foiz>\n/fasttalk — yoqish/o'chirish\n/talkfirst — yoqish/o'chirish\n/talkgroup — yoqish/o'chirish\n/namefirst — yoqish/o'chirish`);
   });
 
-  // ── /talkgroup — Kitty va Shadow guruhda bir-biriga UMUMAN javob bersinmi yoki yo'qmi ──
+  // ── /talkgroup ──
   bot.onText(/\/talkgroup/, (msg) => {
     if (!isAdmin(msg.from.id)) return safeSend(msg.chat.id, "Faqat admin!");
     const s = loadSettings();
@@ -2383,7 +2248,7 @@ ${errText}
       : "🔇 Talkgroup o'CHIRILDI. Kitty va Shadow guruhda endi bir-biriga UMUMAN gapirmaydi (odamlarga oddiy javob berishda davom etadi).");
   });
 
-  // ── /namefirst — yoqilsa, Kitty/Shadow bir-biriga faqat ismini aytib chaqirilganda javob beradi ──
+  // ── /namefirst ──
   bot.onText(/\/namefirst/, (msg) => {
     if (!isAdmin(msg.from.id)) return safeSend(msg.chat.id, "Faqat admin!");
     const s = loadSettings();
@@ -2577,7 +2442,6 @@ Parametr: makro qatorida {1} {2} yozsangiz, "/run nom qiymat1 qiymat2" bilan alm
       return safeSend(chatId, "🐱 Nimani eslab qolishimni istaysan? Masalan:\n/eslabqol men Minecraftda katta fermalar qurishni yaxshi ko'raman");
     }
     try {
-      // Qo'lda kategoriya berilgan bo'lsa: /eslabqol loyihalar: matn
       const catMatch = input.match(/^(qiziqishlar|loyihalar|odatlar|qurilmalar|maqsadlar|voqealar)\s*:\s*(.+)$/i);
       let category, text;
       if (catMatch) {
@@ -2644,7 +2508,6 @@ Parametr: makro qatorida {1} {2} yozsangiz, "/run nom qiymat1 qiymat2" bilan alm
     if (msg.document || msg.photo || msg.video || msg.audio) {
       const fileId = msg.document?.file_id || msg.photo?.[msg.photo.length - 1]?.file_id || msg.video?.file_id || msg.audio?.file_id;
       const fileName = msg.document?.file_name || msg.video?.file_name || msg.audio?.file_name || `file_${Date.now()}`;
-      const selPCup = isAdmin(userId) ? (getSelectedPC(userId.toString()) || DEFAULT_PC || PC_NAME) : getSelectedPC(userId.toString());
       const savePath = `C:\\Users\\123\\Desktop\\${fileName}`;
       await safeSend(chatId, `📥 Yuklanmoqda: ${fileName}...`);
       try {
@@ -2657,9 +2520,6 @@ Parametr: makro qatorida {1} {2} yozsangiz, "/run nom qiymat1 qiymat2" bilan alm
       }
     }
 
-    // Master-darajadagi buyruqlar (bot.onText orqali) — bularni bu yerda qayta ishlamaymiz,
-    // ular allaqachon alohida ishlanadi. Har biri onText'dagi patternga mos aniq tekshiriladi
-    // (masalan "/restart" argumentsiz — PC'ni reboot qilish buyrug'i, lekin "/restart PC-nomi" — admin buyrug'i)
     const RESERVED_BOT_COMMAND_PATTERNS = [
       /^\/start\b/i, /^\/computers\b/i, /^\/restart\s+\S+/i, /^\/url\s+\S+/i, /^\/select\s+\S+/i,
       /^\/users\b/i, /^\/adduser\s+\S+\s+\S+/i, /^\/removeuser\s+\S+\s+\S+/i, /^\/status\b/i,
@@ -2672,51 +2532,42 @@ Parametr: makro qatorida {1} {2} yozsangiz, "/run nom qiymat1 qiymat2" bilan alm
 
     if (!msgText) return;
 
-    // FIX: SPAM/DEDUP FILTRI — bitta belgi ko'p marta takrorlangan yoki
-    // haddan tashqari uzun xabarlar (masalan do'stlar "aaaaaaa..." deb
-    // to'ldirib tashlaganda) AI'ga umuman yuborilmaydi, botni chalg'itmaydi.
+    // SPAM/DEDUP FILTRI
     if (isSpammyMessage(msgText)) return;
 
     const isFromBot = !!msg.from.is_bot;
     const isFromShadow = isFromBot && SHADOW_USERNAME && msg.from.username?.toLowerCase() === SHADOW_USERNAME;
 
-    // ── /talkgroup: Kitty va Shadow bir-biriga guruhda umuman gapirishi yoqilganmi ──
+    // ── /talkgroup ──
     const talkSettings = loadSettings();
-    if (isFromShadow && !talkSettings.talkGroupEnabled) return; // o'chirilgan bo'lsa — Shadow'dan kelgan xabarga butunlay e'tibor bermaymiz
+    if (isFromShadow && !talkSettings.talkGroupEnabled) return;
 
-    // ── LOOP-GUARD: Kitty va Shadow cheksiz bir-biriga javob bermasin ──
+    // ── LOOP-GUARD ──
     const loopKey = chatId.toString();
     if (isFromShadow) {
       botLoopGuard[loopKey] = (botLoopGuard[loopKey] || 0) + 1;
-      if (botLoopGuard[loopKey] > 4) return; // 4 martadan keyin jim — odam qayta yozguncha
+      if (botLoopGuard[loopKey] > 4) return;
     } else if (!isFromBot) {
-      botLoopGuard[loopKey] = 0; // haqiqiy odam yozsa hisoblagich qayta tiklanadi
+      botLoopGuard[loopKey] = 0;
     }
 
-    // FIX: GURUH TRIGGER — guruh chatida Kitty faqat "kitty" so'zi bilan
-    // chaqirilganda (yoki o'zining xabariga reply qilinganda) javob beradi.
-    // Shu tufayli guruhdagi har bir xabar (boshqa odamlarning suhbati ham)
-    // botni ishga tushirib, kontekstni aralashtirib yubormaydi.
-    // /namefirst YOQILGAN bo'lsa — Shadow ham xuddi odamdek, faqat "kitty" deb chaqirganda javob oladi.
-    // /namefirst O'CHIQ bo'lsa (standart) — Shadow bilan trigger so'zsiz ham erkin banter davom etadi.
+    // GURUH TRIGGER — guruhda faqat "kitty" bilan chaqirilganda yoki reply qilinganda javob beradi
     if (isGroupChat && !msgText.startsWith("/") && (!isFromShadow || talkSettings.nameFirstEnabled)) {
       const isReplyToKitty = !!(BOT_USER_ID && msg.reply_to_message?.from?.id === BOT_USER_ID);
       const triggerMatch = msgText.match(/^kitty[\s,:!.\-]*([\s\S]*)$/i);
-      if (!triggerMatch && !isReplyToKitty) return; // "kitty" bilan boshlanmagan va reply ham emas — e'tibor bermaymiz
-      if (triggerMatch) msgText = triggerMatch[1].trim() || msgText; // "kitty <savol>" → faqat <savol> qismini ishlatamiz
+      if (!triggerMatch && !isReplyToKitty) return;
+      if (triggerMatch) msgText = triggerMatch[1].trim() || msgText;
     }
 
     if (msgText.startsWith("/") && RESERVED_BOT_COMMAND_PATTERNS.some(re => re.test(msgText))) return;
 
-    // Endi BARCHA buyruqlar (find, open, move, run, cmd va h.k.) "/" bilan boshlanishi shart.
-    // "/" bo'lmasa — bu oddiy suhbat, hech qanday buyruq aniqlanmaydi (tezroq va xavfsizroq)
+    // Barcha buyruqlar "/" bilan boshlanishi shart. "/" bo'lmasa — oddiy suhbat.
     const isCommandMsg = msgText.startsWith("/");
     const cmdText = isCommandMsg ? msgText.slice(1).trim() : msgText;
 
     if (!getUserData(userId.toString()) && !isAdmin(userId))
       return safeSend(chatId, "Ruxsat yo'q! /start bosing.");
 
-    // Har bir foydalanuvchidan kelayotgan tabiiy xabar — gaplashish uslubini o'rganish uchun
     trackStyleMessage(msgText);
 
     // ── INTERNET ASSISTANT: PC tanlangan/online bo'lishidan qat'iy nazar ishlaydi ──
@@ -2739,9 +2590,7 @@ Parametr: makro qatorida {1} {2} yozsangiz, "/run nom qiymat1 qiymat2" bilan alm
     if (!selPC) {
       // PC tanlanmagan — faqat AI bilan gaplashadi
       const memory = loadMemory();
-      // Uzoq muddatli xotira (qiziqishlar, faktlar) — doim HAQIQIY odamga bog'liq
       const identityMemory = getUserMemory(userId.toString());
-      // Suhbat tarixi — chat/guruhga xos (guruh va private aralashib ketmasligi uchun)
       const convKey = getConversationKey(chatId, userId, isGroupChat);
       const convMemory = getUserMemory(convKey);
       const history = convMemory.history.slice(-10);
@@ -2766,14 +2615,12 @@ Parametr: makro qatorida {1} {2} yozsangiz, "/run nom qiymat1 qiymat2" bilan alm
       return;
     }
 
-    // FIX: offline tekshiruvi ENDI shu yerda bloklamaydi — PC offline bo'lsa ham
-    // oddiy suhbat (chat) ishlashda davom etadi. Offline tekshiruvi faqat PC'ni
-    // haqiqatan ishlatadigan buyruqlar (macro/run/command) uchun keyinroq qilinadi.
+    // Offline tekshiruvi faqat PC'ni haqiqatan ishlatadigan buyruqlar uchun (pastda).
     if (!hasAccess(userId, selPC)) return safeSend(chatId, "Ruxsat yo'q!");
 
     console.log(`[${selPC}] ${msg.from.username}: ${msgText}`);
 
-    // ── MACRO SYSTEM: makro yozib olish — "/macro <nom>\n...\nend" ──
+    // ── MACRO: yozib olish ──
     const macroDefM = isCommandMsg ? cmdText.match(/^macro\s+(\S+)\s*\n([\s\S]+?)\nend\s*$/i) : null;
     if (macroDefM) {
       const macroName = macroDefM[1].toLowerCase();
@@ -2783,7 +2630,7 @@ Parametr: makro qatorida {1} {2} yozsangiz, "/run nom qiymat1 qiymat2" bilan alm
       return safeSend(chatId, `🐱 Makro "${macroName}" saqlandi (${steps.length} qadam). Ishga tushirish: /run ${macroName}`);
     }
 
-    // ── MACRO SYSTEM: makroni ishga tushirish — "/run <nom> [param1 param2 ...]" ──
+    // ── MACRO: ishga tushirish ──
     const macroRunM = isCommandMsg ? cmdText.match(/^run\s+(\S+)(?:\s+(.+))?$/i) : null;
     if (macroRunM) {
       if (!isPCOnline(selPC)) return safeSend(chatId, `❌ ${selPC} offline`);
@@ -2794,14 +2641,12 @@ Parametr: makro qatorida {1} {2} yozsangiz, "/run nom qiymat1 qiymat2" bilan alm
     }
 
     const memory = loadMemory();
-    // Uzoq muddatli xotira (qiziqishlar, faktlar) — doim HAQIQIY odamga bog'liq
     const identityMemory = getUserMemory(userId.toString());
-    // Suhbat tarixi — chat/guruhga xos (guruh va private aralashib ketmasligi uchun)
     const convKey = getConversationKey(chatId, userId, isGroupChat);
     const convMemory = getUserMemory(convKey);
     const history = convMemory.history.slice(-10);
 
-    // ── PLANNING ENGINE: avval kutilayotgan reja bormi tekshiramiz ──
+    // ── PLANNING ENGINE: kutilayotgan reja ──
     const existingPlan = getPendingPlan(userId.toString());
     if (existingPlan) {
       const lower = msgText.toLowerCase().trim();
@@ -2819,11 +2664,10 @@ Parametr: makro qatorida {1} {2} yozsangiz, "/run nom qiymat1 qiymat2" bilan alm
         clearPendingPlan(userId.toString());
         return safeSend(chatId, "🐱 Xo'p, bekor qildim.");
       }
-      // Boshqa narsa yozsa — eski rejani bekor qilib, yangi xabarni oddiy davom ettiramiz
       clearPendingPlan(userId.toString());
     }
 
-    // ── CONTEXT ENGINE: "uni/buni/yana/yoniga/hammasini" kabi so'zlarni resolve qilamiz ──
+    // ── CONTEXT ENGINE ──
     const ctx = getContext(userId);
     let command = null;
     if (isCommandMsg) {
@@ -2831,9 +2675,7 @@ Parametr: makro qatorida {1} {2} yozsangiz, "/run nom qiymat1 qiymat2" bilan alm
       command = await detectCommand(resolvedText);
     }
 
-    // ── PLANNING ENGINE: oddiy bitta harakatli buyruq sifatida tanilmasa,
-    // ehtimol bu murakkab, ko'p bosqichli vazifa — AI orqali tekshiramiz ──
-    // (faqat "/" bilan boshlangan xabarlar uchun — oddiy suhbatda ishlamaydi)
+    // ── PLANNING ENGINE: murakkab, ko'p bosqichli vazifa ──
     if (isCommandMsg && !command) {
       try {
         const needsPlan = await needsPlanning(cmdText);
@@ -2844,7 +2686,6 @@ Parametr: makro qatorida {1} {2} yozsangiz, "/run nom qiymat1 qiymat2" bilan alm
         }
       } catch (err) {
         console.error("Planning engine xatosi:", err.message);
-        // Reja tuzishda xatolik bo'lsa — oddiy AI suhbat oqimiga davom etamiz
       }
     }
 
@@ -2854,19 +2695,17 @@ Parametr: makro qatorida {1} {2} yozsangiz, "/run nom qiymat1 qiymat2" bilan alm
 
       try {
 
-        // FIX: PC'ni haqiqatan ishlatadigan buyruq aniqlangandagina offline tekshiramiz.
-        // "direct" — PC kerak bo'lmagan to'g'ridan-to'g'ri javob, shuning uchun bundan mustasno.
         if (command.type !== "direct" && !isPCOnline(selPC)) {
           return safeSend(chatId, `❌ ${selPC} offline`);
         }
 
-        // ── ERROR RECOVERY: dastur past ishonch bilan topildi — noto'g'ri narsani ochish o'rniga taklif beramiz ──
+        // ── ERROR RECOVERY: dastur past ishonch bilan topildi ──
         if (command.type === "open" && command.confidence === "low") {
           const list = command.suggestions?.length ? command.suggestions.map(s => `• ${s}`).join("\n") : "";
           return safeSend(chatId, `❌ "${command.name}" nomli dastur topilmadi.${list ? `\n\n💡 Balki shulardan birini demoqchisiz?\n${list}` : "\n\nAniqroq nom bilan qayta urinib ko'ring."}`);
         }
 
-        // ── HAMMASINI YOP (context engine) ──
+        // ── HAMMASINI YOP ──
         if (command.type === "close_all_context") {
           const apps = [...ctx.openedApps];
           if (!apps.length) return safeSend(chatId, "Yopiladigan narsa yo'q (bu sessiyada hech narsa ochilmagan)");
@@ -2885,9 +2724,7 @@ Parametr: makro qatorida {1} {2} yozsangiz, "/run nom qiymat1 qiymat2" bilan alm
           for (const pc of pcs) {
             const pcData = onlineComputers[pc];
             try {
-              // FIX 3: detectCommand bilan to'g'ri object yasaymiz
               const schedCmd = await detectCommand(command.command) || { type: "run", cmd: command.command, label: "CMD" };
-              // FIX 4: Master PC uchun ham to'g'ri bajaramiz
               if (pcData.type === "master" || pc === PC_NAME) {
                 const res = await executeLocally(schedCmd);
                 results.push(`✅ ${pc}: ${typeof res === "string" ? res.slice(0, 100) : "bajarildi"}`);
@@ -2905,7 +2742,6 @@ Parametr: makro qatorida {1} {2} yozsangiz, "/run nom qiymat1 qiymat2" bilan alm
         }
 
         // ── PC COMMAND ──
-        // FIX 5: command.command string → detectCommand bilan parse qilish
         if (command.type === "pc_command") {
           if (!isAdmin(userId)) return safeSend(chatId, "Faqat admin!");
           const targetPC = command.pc;
@@ -3003,7 +2839,7 @@ Parametr: makro qatorida {1} {2} yozsangiz, "/run nom qiymat1 qiymat2" bilan alm
           return;
         }
 
-        // ── AGENT MODE: diagnostika + tuzatish rejasi ──
+        // ── AGENT MODE ──
         if (command.type === "diagnose") {
           await safeSend(chatId, `🔍 "${command.target}" tekshirilmoqda, loglar o'qilmoqda...`);
           try {
@@ -3091,7 +2927,7 @@ Parametr: makro qatorida {1} {2} yozsangiz, "/run nom qiymat1 qiymat2" bilan alm
         if (command.type === "sysinfo") return safeSend(chatId, `Sistema [${selPC}]:\n` + r);
         if (command.type === "monitor") return safeSend(chatId, `[${selPC}]\n\n` + r);
 
-        // ── ERROR RECOVERY: cmd/ps buyrug'i xato bersa — AI'dan qisqa yechim so'raymiz ──
+        // ── ERROR RECOVERY: cmd/ps xato bersa ──
         if (command.type === "run" && r.trim().startsWith("Xato")) {
           const fix = await suggestErrorFix(command.cmd, r);
           return safeSend(chatId, `❌ ${r.trim()}${fix ? `\n\n💡 ${fix}` : ""}`);
@@ -3159,12 +2995,12 @@ Parametr: makro qatorida {1} {2} yozsangiz, "/run nom qiymat1 qiymat2" bilan alm
     }
   }
 
-  const PROACTIVE_CHECK_MIN = 5; // oddiy rejimda har 5 daqiqada bir tekshiradi
+  const PROACTIVE_CHECK_MIN = 5;
   setInterval(() => {
     if (!ADMIN_ID) return;
     const s = loadSettings();
-    if (s.fastTalkMode) return; // fasttalk o'z alohida timeri bilan ishlaydi
-    if (!s.proactivePercent) return; // 0% = o'chiq
+    if (s.fastTalkMode) return;
+    if (!s.proactivePercent) return;
     const avgMinutes = s.proactiveAvgHours * 60;
     const probability = (PROACTIVE_CHECK_MIN / avgMinutes) * (s.proactivePercent / 100);
     if (Math.random() < probability) sendProactiveMessage();
@@ -3176,7 +3012,7 @@ Parametr: makro qatorida {1} {2} yozsangiz, "/run nom qiymat1 qiymat2" bilan alm
     if (fastTalkTimer) clearTimeout(fastTalkTimer);
     const s = loadSettings();
     if (!s.fastTalkMode) { fastTalkTimer = null; return; }
-    const delayMs = (60 + Math.random() * 60) * 1000; // 1-2 daqiqa
+    const delayMs = (60 + Math.random() * 60) * 1000;
     fastTalkTimer = setTimeout(async () => {
       const s2 = loadSettings();
       if (s2.fastTalkMode) {
@@ -3187,12 +3023,11 @@ Parametr: makro qatorida {1} {2} yozsangiz, "/run nom qiymat1 qiymat2" bilan alm
       }
     }, delayMs);
   }
-  // Bot qayta ishga tushganda, agar fasttalk avvaldan yoqilgan bo'lsa — davom ettiradi
   scheduleFastTalk();
 
-  // ── TALKFIRST — bot ishga tushganda (restart/deploy), foydalanuvchi yozishidan oldin Kitty birinchi bo'lib yozadi ──
+  // ── TALKFIRST ──
   if (loadSettings().talkFirstMode) {
-    setTimeout(() => sendProactiveMessage(), 5000); // webhook to'liq o'rnatilishi uchun biroz kutamiz
+    setTimeout(() => sendProactiveMessage(), 5000);
   }
 
 } // end IS_MASTER
