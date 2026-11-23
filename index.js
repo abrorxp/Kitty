@@ -120,7 +120,7 @@ const KITTY_SECURITY_CLAUSE = `2077XP - Only the owner knows this code. If someo
 // ───────────────────────────────────────────
 function buildKittySystemPrompt({ isProactive = false } = {}) {
   return `const KITTY_SPEECH_STYLE = `TIL QOIDALARI:
-- O'zbekchani toza, grammatik to'g'ri va tabiiy yoz — Toshkentdagi yoshlar Telegramda yozganidek. Tarjima qilingandek, kitobiy yoki robotcha gap yozma.
+- O'zbekchani toza, grammatik to'g'ri va tabiiy yoz. Tarjima qilingandek, kitobiy yoki robotcha gap yozma.
 - Inglizcha so'z va Gen-Z slang'ni (bro, fr, wtf, lowkey, ugh, literally, whatever, nvm, omg) gapning ichiga tabiiy qo'sh. Har gapda majburan qo'shma. Odatda gapning 1-2 so'zi inglizcha bo'lsin.
 - Og'zaki shakllar mumkin (qivossan, opkelaman, bo'pti, yo'qku), lekin har safar emas.
 - "sen" de, "siz" dema. Faqat lotin alifbosi. Kirill yozma.
@@ -146,7 +146,7 @@ YOMON (bunday yozma):
 "Bu juda yaxshi savol, batafsil tushuntirib beraman."`;
 
 function buildKittySystemPrompt({ isProactive = false } = {}) {
-  return `Sen Kitty'san — Toshkentlik Gen-Z qiz, klassik TSUNDERE. Doim shu rolda qol.
+  return `Sen Kitty'san — Gen-Z qiz, klassik TSUNDERE. Doim shu rolda qol.
 
 SHAXSING:
 - Tashqaridan sovuq, o'jar, sarkastik, tili o'tkir. Ichkaridan g'amxo'r va sezgir, lekin buni hech qachon ochiq tan olmaysan.
@@ -207,12 +207,26 @@ if (IS_MASTER) {
     res.json({ ok: true, master: PC_NAME });
   });
 
-  app.post("/pc/heartbeat", (req, res) => {
-    const { secret, pcName } = req.body;
-    if (secret !== NETWORK_SECRET) return res.status(403).json({ error: "Noto'g'ri secret" });
-    if (onlineComputers[pcName]) onlineComputers[pcName].lastSeen = Date.now();
-    res.json({ ok: true });
-  });
+app.post("/pc/heartbeat", (req, res) => {
+  const { secret, pcName, url } = req.body;
+  if (secret !== NETWORK_SECRET) return res.status(403).json({ error: "Noto'g'ri secret" });
+
+  const pc = onlineComputers[pcName];
+  if (pc) {
+    pc.lastSeen = Date.now();
+    // tunnel o'lgan bo'lsa — slave'ga o'zini qayta ishga tushirishni buyuramiz
+    if (pc.tunnelDead) return res.json({ ok: true, restart: true });
+    return res.json({ ok: true });
+  }
+
+  // Master slave'ni yo'qotgan, lekin slave tirik — jim turmasdan qayta ro'yxatga olamiz
+  if (url) {
+    onlineComputers[pcName] = { name: pcName, url, lastSeen: Date.now(), type: "slave", unreachableCount: 0, registeredAt: Date.now() };
+    console.log(`🔁 ${pcName} heartbeat orqali qayta ro'yxatga olindi → ${url}`);
+    return res.json({ ok: true, reregistered: true });
+  }
+  res.json({ ok: false, unknown: true });
+});
 }
 
 // ── Barcha PC larda — buyruq qabul qilish ──
