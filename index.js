@@ -1,7 +1,8 @@
 // ═══════════════════════════════════════════════════════════
 //  KITTY BOT — Multi-PC Network Architecture
 //  Master/Slave | Webhook | No 409 Conflict
-//  FIXED: 2026-11 — persona bloki tuzatildi, slave offline xatosi tuzatildi
+//  FIXED: 2026-11-23 — AI provayderlar zanjiri (Gemini → Groq → OpenRouter),
+//  webhook tokeni logga chiqmaydi
 // ═══════════════════════════════════════════════════════════
 
 const TelegramBot = require("node-telegram-bot-api");
@@ -21,20 +22,6 @@ require("dotenv").config();
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const WEBHOOK_URL = process.env.WEBHOOK_URL;
 const PORT = process.env.PORT || 3000;
-const LLM_PROVIDER = (process.env.LLM_PROVIDER?.trim() || "openrouter").toLowerCase();
-const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL?.trim() || "liquid/lfm-2.5-2.6b:free";
-
-// OpenRouter free modellarni tez-tez o'zgartirib turadi — agar yana 404/402 xatolar
-// chiqsa, https://openrouter.ai/models?_price=0 dan joriy ro'yxatni tekshirib,
-// shu yerni yangilang. Tartib TEZLIK bo'yicha.
-const OPENROUTER_FALLBACK_MODELS = [
-  "liquid/lfm-2.5-2.6b:free",
-  "thinkingmachines/inkling-small:free",
-  "poolside/laguna-xs-2.1:free",
-  "thinkingmachines/inkling:free",
-  "poolside/laguna-s-2.1:free",
-  "nvidia/nemotron-3.5-lightning:free",
-];
 
 const ADMIN_ID = process.env.ADMIN_ID;
 // Shadow botining Telegram username'i (guruhda undan kelgan xabarni tanish uchun, @ siz)
@@ -294,11 +281,12 @@ app.listen(SLAVE_PORT, async () => {
         await bot.deleteWebHook();
         const fullUrl = `${WEBHOOK_URL}/webhook/${TELEGRAM_TOKEN}`;
         await bot.setWebHook(fullUrl);
-        console.log(`Webhook: ${fullUrl}`);
+        // XAVFSIZLIK: fullUrl ichida bot tokeni bor — uni hech qachon logga chiqarmaymiz
+        console.log("Webhook o'rnatildi ✅");
         const info = await bot.getWebHookInfo();
-        console.log("Webhook info:", info);
+        console.log(`Webhook holati: kutilayotgan=${info.pending_update_count}${info.last_error_message ? `, oxirgi xato: ${info.last_error_message}` : ""}`);
       } catch (err) {
-        console.error("Webhook xatosi:", err.message);
+        console.error("Webhook xatosi:", String(err.message).replace(TELEGRAM_TOKEN || "", "<token>"));
       }
     }
     onlineComputers[PC_NAME] = { name: PC_NAME, url: null, lastSeen: Date.now(), type: "master" };
@@ -440,65 +428,81 @@ async function safeSendMD(chatId, text, options = {}) {
 }
 
 // ───────────────────────────────────────────
-// AI PROVIDERS
+// AI PROVIDERS — Gemini → Groq → OpenRouter (ketma-ket, parallel EMAS)
+// Parallel so'rov bepul kunlik limitni (OpenRouter: 50/kun) bir necha baravar tez tugatardi.
+//
+// Render → Environment:
+//   GEMINI_API_KEY   (aistudio.google.com)
+//   GEMINI_MODEL     (AI Studio'dagi bepul Flash/Flash-Lite modelining aniq nomi, masalan gemini-3.1-flash-lite)
+//   GROQ_API_KEY     (console.groq.com)
+//   GROQ_MODEL       (ixtiyoriy, standart: llama-3.3-70b-versatile)
+//   OPENROUTER_API_KEY, OPENROUTER_MODEL (ixtiyoriy, standart: google/gemma-4-31b-it:free)
+// Kalit qo'yilmagan provayder avtomatik o'tkazib yuboriladi.
 // ───────────────────────────────────────────
-async function openRouterChat(messages, model) {
-  const apiKey = process.env.OPENROUTER_API_KEY;
-  if (!apiKey) throw new Error("OpenRouter API key missing");
+const AI_PROVIDERS = [
+  {
+    name: "gemini",
+    url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+    key: process.env.GEMINI_API_KEY,
+    model: process.env.GEMINI_MODEL?.trim() || "gemini-4-hydrogen",
+  },
+  {
+    name: "groq",
+    url: "https://api.groq.com/openai/v1/chat/completions",
+    key: process.env.GROQ_API_KEY,
+    model: process.env.GROQ_MODEL?.trim() || "llama-3.3-70b-versatile",
+  },
+  {
+    name: "openrouter",
+    url: "https://openrouter.ai/api/v1/chat/completions",
+    key: process.env.OPENROUTER_API_KEY,
+    model: process.env.OPENROUTER_MODEL?.trim() || "google/gemma-4-31b-it:free",
+  },
+].filter(p => p.key && p.model);
+
+if (!AI_PROVIDERS.length) console.warn("⚠️ Hech bir AI provayder kaliti topilmadi (GEMINI_API_KEY / GROQ_API_KEY / OPENROUTER_API_KEY)");
+else console.log("🤖 AI zanjiri:", AI_PROVIDERS.map(p => `${p.name}(${p.model})`).join(" → "));
+
+const aiHttpsAgent = new https.Agent({ keepAlive: true });
+
+async function aiProviderChat(provider, messages) {
+  const headers = { Authorization: `Bearer ${provider.key}`, "Content-Type": "application/json" };
+  if (provider.name === "openrouter") { headers["HTTP-Referer"] = "http://localhost"; headers["X-Title"] = "KittyBot"; }
   const res = await axios.post(
-    "https://openrouter.ai/api/v1/chat/completions",
-    { model, messages: messages.map(m => ({ role: m.role, content: m.content })), temperature: 0.85, max_tokens: 1500 },
+    provider.url,
     {
-      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", "HTTP-Referer": "http://localhost", "X-Title": "KittyBot" },
-      httpsAgent: new https.Agent({ keepAlive: true }),
-      timeout: 12000,
-    }
+      model: provider.model,
+      messages: messages.map(m => ({ role: m.role, content: m.content })),
+      temperature: 0.85,
+      max_tokens: 600,
+    },
+    { headers, httpsAgent: aiHttpsAgent, timeout: 15000 }
   );
   const choice = res.data?.choices?.[0];
-  let responseText = "";
+  let text = "";
   if (choice) {
-    if (typeof choice.text === "string") responseText = choice.text.trim();
-    if (!responseText && choice.message) {
-      const c = choice.message.content;
-      if (typeof c === "string") responseText = c.trim();
-      else if (Array.isArray(c)) responseText = c.map(x => x.text || "").join("").trim();
-    }
+    const c = choice.message?.content;
+    if (typeof c === "string") text = c.trim();
+    else if (Array.isArray(c)) text = c.map(x => x.text || "").join("").trim();
+    if (!text && typeof choice.text === "string") text = choice.text.trim();
   }
-  if (!responseText && res.data?.error) throw new Error(`OpenRouter: ${JSON.stringify(res.data.error)}`);
-  if (!responseText) throw new Error(`No text: ${JSON.stringify(res.data).slice(0, 300)}`);
-  return responseText;
+  if (!text) throw new Error(`bo'sh javob (finish_reason: ${choice?.finish_reason || "?"})`);
+  return text;
 }
 
-// Eng tez 3 ta modelni PARALLEL ishga tushiradi va birinchi muvaffaqiyatli javobni oladi.
-// Hammasi ishlamasa, qolganlarini ketma-ket sinaydi.
 async function chatWithAI(messages) {
-  const allModels = [OPENROUTER_MODEL, ...OPENROUTER_FALLBACK_MODELS.filter(m => m !== OPENROUTER_MODEL)];
-  const fastTier = allModels.slice(0, 3);
-  const restTier = allModels.slice(3);
-
-  try {
-    const winner = await Promise.any(
-      fastTier.map(model =>
-        openRouterChat(messages, model).then(text => {
-          console.log("✅ AI javob berdi:", model);
-          return text;
-        })
-      )
-    );
-    return winner;
-  } catch (_) {
-    console.error("Tez modellarning barchasi ishlamadi, qolganlarini ketma-ket sinaymiz...");
-  }
-
-  for (const model of restTier) {
+  for (const provider of AI_PROVIDERS) {
     try {
-      console.log("Trying:", model);
-      return await openRouterChat(messages, model);
+      const text = await aiProviderChat(provider, messages);
+      console.log("✅ AI javob berdi:", provider.name);
+      return text;
     } catch (err) {
-      console.error(`${model} failed: ${err.message}`);
+      const status = err.response?.status;
+      const detail = err.response?.data ? JSON.stringify(err.response.data).slice(0, 200) : err.message;
+      console.error(`${provider.name} (${provider.model}) xato: ${status || ""} ${detail}`);
     }
   }
-  throw new Error("Barcha AI modellar hozir ishlamayapti, birozdan so'ng qayta urinib ko'ring.");
+  throw new Error("Barcha AI servislar hozir ishlamayapti, birozdan so'ng qayta urinib ko'ring.");
 }
 
 // ───────────────────────────────────────────
@@ -2140,6 +2144,7 @@ if (IS_MASTER) {
 
 🖥️ Tanlangan: ${getSelectedPC(msg.from.id.toString()) || "yo'q"}
 🌐 Online kompyuterlar: ${Object.keys(onlineComputers).join(", ") || "yo'q"}
+🤖 AI zanjiri: ${AI_PROVIDERS.map(p => p.name).join(" → ") || "yo'q (kalit kiritilmagan)"}
 ⏱️ Ishlash vaqti: ${formatUptime(Date.now() - PROCESS_START)}
 🧮 Jami bajarilgan buyruqlar: ${stats.totalCommands || 0}
 💾 Xotira (bot jarayoni): ${(mem.rss / 1024 / 1024).toFixed(0)} MB
